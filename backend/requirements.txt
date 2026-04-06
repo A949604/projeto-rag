@@ -1,4 +1,7 @@
 fastapi
 uvicorn
+langchain
 langchain-openai
 pydantic-settings
+langchain-chroma
+chromadb

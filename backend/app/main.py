@@ -2,13 +2,9 @@ from fastapi import FastAPI
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import BaseModel#, Field
+from .rag import RagService
 
 class Settings(BaseSettings):
-    # azure_openai_api_key: str = Field(default="", env="AZURE_OPENAI_API_KEY")
-    # azure_openai_endpoint: str = Field(default="", env="AZURE_OPENAI_ENDPOINT")
-    # azure_openai_api_version: str = Field(default="", env="AZURE_OPENAI_API_VERSION")
-    # azure_openai_chat_deployment: str = Field(default="", env="AZURE_OPENAI_CHAT_DEPLOYMENT")
-
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
     azure_openai_api_version: str = ""
@@ -21,8 +17,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+class QuestionRequest(BaseModel):
+    question: str
+
 settings = Settings()
 app = FastAPI()
+rag_service = RagService(settings)
 
 @app.get("/")
 def home():
@@ -56,3 +56,18 @@ def embedding():
         "dimensions": len(vector),
         "preview": vector[:5],
     } 
+
+@app.post("/ask")
+def ask_question(data: QuestionRequest):
+    result = rag_service.ask(data.question)
+    return {
+        "question": data.question,
+        "answer": result["answer"],
+        "sources": [
+            {
+                "source": doc.metadata.get("source"),
+                "content": doc.page_content,
+            }
+            for doc in result["sources"]
+        ],
+    }
