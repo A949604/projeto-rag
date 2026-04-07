@@ -74,7 +74,7 @@ def embedding():
 def ask_question(data: QuestionRequest):
 
     # delega a lógica de busca e resposta para o RagService
-    result = rag_service.ask(data.question)
+    result = rag_service.ask("./data/uploads/teste.pdf", data.question)
     return {
         "question": data.question,
         "answer": result["answer"],

@@ -1,9 +1,12 @@
 from langchain_core.documents import Document
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_chroma import Chroma
+from pathlib import Path
+from .pdf import extract_text_from_pdf
 
-def split_text(text: str, chunk_size: int = 100, overlap: int = 20) -> list[str]:
-    # divide um texto em pedaços menores
+
+def split_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+    # divide um texto em pedaços menores para facilitar a busca semântica
     # O overlap repete um pedaço do texto anterior para manter o contexto entre os chunks
     chunks = []
     start = 0
@@ -20,84 +23,64 @@ class RagService:
 
     def __init__(self, settings):
         self.settings = settings
+        # o banco de vetores começa vazio — só é criado quando um PDF for enviado
+        self.vector_store = None
 
     # cria e retorna o modelo de embeddings da Azure
     def get_embeddings(self):
-        embeddings = AzureOpenAIEmbeddings(
+        # retorna o modelo de embeddings da Azure
+        return AzureOpenAIEmbeddings(
             api_key=self.settings.azure_openai_api_key,
             azure_endpoint=self.settings.azure_openai_endpoint,
             api_version=self.settings.azure_openai_api_version,
             azure_deployment=self.settings.azure_openai_embedding_deployment,
         )
-        return embeddings
 
     # cria e retorna o modelo de linguagem da Azure usado para gerar a resposta final
     # temperature=0 deixa as respostas mais precisas e menos aleatórias
     def get_chat_model(self):
-        model = AzureChatOpenAI(
+        # retorna o LLM da Azure para gerar a resposta final
+        return AzureChatOpenAI(
             api_key=self.settings.azure_openai_api_key,
             azure_endpoint=self.settings.azure_openai_endpoint,
             api_version=self.settings.azure_openai_api_version,
             azure_deployment=self.settings.azure_openai_chat_deployment,
             temperature=0,
         )
-        return model
 
-    # simula uma base de conhecimento com documentos estáticos
-    def load_documents(self):
-        docs = [
-            {
-                "source": "doc1",
-                "text": (
-                    "RAG, ou Retrieval-Augmented Generation, é uma técnica que combina a geração de texto com a recuperação de informações relevantes. "
-                ),
-            },
-            {
-                "source": "doc2",
-                "text": (
-                    "O processo de RAG envolve a recuperação de documentos relevantes com base em uma consulta, seguida pela geração de uma resposta que incorpora as informações recuperadas. "
-                ),
-            },
-        ]
+    def build_documents_from_pdf(self, pdf_path: str) -> list[Document]:
+        # extrai o texto do PDF e divide em chunks prontos para indexação
+        text = extract_text_from_pdf(Path(pdf_path))
+        chunks = split_text(text)
 
         documents = []
-
-        for item in docs:
-            # quebra o texto de cada documento em chunks menores antes de indexar
-            chunks = split_text(item["text"])
-            for index, chunk in enumerate(chunks):
-                # cada chunk vira um Document independente com metadados de rastreabilidade
-                # o metadata permite saber depois de qual documento e qual pedaço veio a resposta
-                documents.append(
-                    Document(
-                        page_content=chunk,
-                        metadata={
-                            "source": item["source"],   # identificador do doc original
-                            "chunk_id": f"{item['source']}_{index}",    # identificador único do chunk
-                        },
-                    )
+        for index, chunk in enumerate(chunks):
+            documents.append(
+                Document(
+                    page_content=chunk,
+                    metadata={
+                        "source": Path(pdf_path).name,
+                        "chunk_id": f"chunk_{index}",
+                    },
                 )
+            )
         return documents
 
-    def build_vector_store(self):
-        # constrói o banco de vetores a partir dos documentos carregados
-        # o Chroma converte cada chunk em embedding e armazena tudo em memória
-        documents = self.load_documents()
-        vector_store = Chroma.from_documents(
+    def build_vector_store(self, pdf_path: str):
+        # constrói o banco de vetores e salva em self.vector_store para uso no ask()
+        documents = self.build_documents_from_pdf(pdf_path)
+        self.vector_store = Chroma.from_documents(
             documents=documents,
             embedding=self.get_embeddings(),    # função que gera os vetores para cada chunk
-            collection_name="rag_teste_chunks",
+            collection_name="rag_pdf",
         )
-        return vector_store
 
-    def ask(self, question: str):
-        # método recebe uma pergunta e retorna a resposta gerada com base nos documentos
-
-        # reconstrói o vector store a cada chamada
-        vector_store = self.build_vector_store()
+    def ask(self, pdf_path: str, question: str):
+        # constrói o vector store com o PDF recebido antes de fazer qualquer busca
+        self.build_vector_store(pdf_path)
 
         # busca os k=2 chunks mais semanticamente próximos da pergunta usando similaridade de cosseno
-        docs = vector_store.similarity_search(question, k=2)
+        docs = self.vector_store.similarity_search(question, k=3)
 
         # monta o contexto que será injetado no prompt, incluindo a fonte e o conteúdo de cada chunk
         context = "\n\n".join(
