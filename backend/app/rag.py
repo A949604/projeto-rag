@@ -2,25 +2,19 @@ from langchain_core.documents import Document
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_chroma import Chroma
 
+def split_text(text: str, chunk_size: int = 100, overlap: int = 20) -> list[str]:
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
 class RagService:
     def __init__(self, settings):
         self.settings = settings
-        self.documents = [
-            Document(
-                page_content="O LangChain é uma estrutura de código aberto projetada para facilitar a criação de aplicações que utilizam grandes modelos de linguagem (LLMs). Ele permite o desenvolvimento de aplicativos como chatbots e agentes virtuais, integrando diferentes componentes e funcionalidades para simplificar o processo de desenvolvimento. Além disso, o LangChain é utilizado em casos de uso como sumarização de texto e análise de código, tornando-se uma ferramenta versátil para desenvolvedores que trabalham com inteligência artificial e processamento de linguagem natural.", 
-                metadata={"source": "doc1"},
-            ),
-
-            Document(
-                page_content="Geração aumentada por recuperação (RAG) é uma estrutura de IA que combina duas técnicas; primeiro, ele recupera informações relevantes de fontes externas, como bancos de dados, documentos ou a Web. Uma vez reunida essa informação, ela é usada para informar e aprimorar a geração de respostas.",
-                metadata={"source": "doc2"},
-            ),
-
-            Document(
-                page_content="Embedding é uma técnica utilizada em aprendizado de máquina e processamento de linguagem natural que representa dados, como palavras ou imagens, em vetores de alta dimensão. Esses vetores permitem que algoritmos capturem relações semânticas, onde palavras ou dados semelhantes são mapeados para pontos próximos no espaço vetorial. Essa abordagem é fundamental para melhorar a eficiência e a precisão em tarefas como busca semântica e análise de sentimentos.",
-                metadata={"source": "doc3"},
-            ),
-        ]
 
     def get_embeddings(self):
         embeddings = AzureOpenAIEmbeddings(
@@ -40,12 +34,45 @@ class RagService:
             temperature=0,
         )
         return model
+
+    def load_documents(self):
+        docs = [
+            {
+                "source": "doc1",
+                "text": (
+                    "RAG, ou Retrieval-Augmented Generation, é uma técnica que combina a geração de texto com a recuperação de informações relevantes. "
+                ),
+            },
+            {
+                "source": "doc2",
+                "text": (
+                    "O processo de RAG envolve a recuperação de documentos relevantes com base em uma consulta, seguida pela geração de uma resposta que incorpora as informações recuperadas. "
+                ),
+            },
+        ]
+
+        documents = []
+
+        for item in docs:
+            chunks = split_text(item["text"])
+            for index, chunk in enumerate(chunks):
+                documents.append(
+                    Document(
+                        page_content=chunk,
+                        metadata={
+                            "source": item["source"],
+                            "chunk_id": f"{item['source']}_{index}",
+                        },
+                    )
+                )
+        return documents
     
     def build_vector_store(self):
+        documents = self.load_documents()
         vector_store = Chroma.from_documents(
-            documents=self.documents,
+            documents=documents,
             embedding=self.get_embeddings(),
-            collection_name="rag_teste",
+            collection_name="rag_teste_chunks",
         )
         return vector_store
 
@@ -54,7 +81,10 @@ class RagService:
         docs = vector_store.similarity_search(question, k=2)
 
         context = "\n\n".join(
-            [f"fonte: {doc.metadata['source']}\n{doc.page_content}" for doc in docs]
+            [
+                f"fonte: {doc.metadata['source']} | chunk: {doc.metadata['chunk_id']}\n{doc.page_content}" 
+                for doc in docs
+            ]
         )
         
         prompt = f"""você pe um assistente que responde a perguntas com base no contexto fornecido. 
